@@ -41,9 +41,10 @@ Shader "Hidden/HDRP/Sky/RenderPbrSky"
     {
         const uint n = PBRSKYCONFIG_IN_SCATTERED_RADIANCE_TABLE_SIZE_W / 2;
 
+        // V points towards the camera. -V points towards the planet.
         float3 L = _SunDirection;
         float3 V = GetSkyViewDirWS(input.positionCS.xy, (float3x3)_PixelCoordToViewDirWS);
-        float3 O = _WorldSpaceCameraPos * 0.001; // Convert to km
+        float3 O = _WorldSpaceCameraPos * 0.001; // Convert m to km
         float3 C = _PlanetCenterPosition;
         float3 P = O - C;
         float3 N = normalize(P);
@@ -63,7 +64,7 @@ Shader "Hidden/HDRP/Sky/RenderPbrSky"
             if (t >= 0)
             {
                 // It's in the view.
-                P = (O - C) - t * V;
+                P = (O - C) + t * -V;
                 N = normalize(P);
                 h = _AtmosphericDepth;
             }
@@ -75,23 +76,41 @@ Shader "Hidden/HDRP/Sky/RenderPbrSky"
 
         float NdotL = dot(N, L);
         float NdotV = dot(N, V);
-        float LdotV = dot(L, V);
 
-        float u = MapAerialPerspective(NdotV, h).x;
-        float v = MapAerialPerspective(NdotV, h).y;
-        float s = MapAerialPerspective(NdotV, h).z;
+        float u = MapAerialPerspective(-NdotV, h).x;
+        float v = MapAerialPerspective(-NdotV, h).y;
+        float s = MapAerialPerspective(-NdotV, h).z;
         float t = MapCosineOfZenithAngle(NdotL);
-
-        float k = (n - 1) * MapCosineOfLightViewAngle(LdotV); // Index
 
         // Do we see the ground?
         if (s == 0)
         {
             // Shade the ground.
             const float3 groundBrdf = INV_PI * _GroundAlbedo;
-            float3 T = SampleTransmittanceTexture(-NdotV, h, true);
-            radiance += T * groundBrdf * SampleGroundIrradianceTexture(NdotL);
+            float3 transm = SampleTransmittanceTexture(-NdotV, h, true);
+            radiance += transm * groundBrdf * SampleGroundIrradianceTexture(NdotL);
         }
+
+        return float4(radiance, 1);
+
+        /*
+
+        // Express the view vector in the local space where N and L span the X-Z plane.
+        float3x3 frame;
+
+        if (abs(NdotL) < (1 - FLT_EPS))
+        {
+            frame = GetLocalFrame(N, Orthonormalize(L, N));
+        }
+        else // (N = ±L)
+        {
+            // The rotation angle doesn't matter due to the symmetry.
+            frame = GetLocalFrame(N);
+        }
+
+        float3 localV = mul(V, transpose(frame));
+
+        float k = (n - 1) * MapCosineOfAzimuthAngle(localV); // Index
 
         const uint zTexSize  = PBRSKYCONFIG_IN_SCATTERED_RADIANCE_TABLE_SIZE_Z;
         const uint zTexCount = PBRSKYCONFIG_IN_SCATTERED_RADIANCE_TABLE_SIZE_W;
@@ -100,7 +119,7 @@ Shader "Hidden/HDRP/Sky/RenderPbrSky"
         t = clamp(t, 0 - 0.5 * rcp(zTexSize),
                      1 - 0.5 * rcp(zTexSize));
 
-        // Shrink by the 'zTexCount' and offset according to the above/below horizon direction and LdotV.
+        // Shrink by the 'zTexCount' and offset according to the above/below horizon direction and phiV.
         float w0 = t * rcp(zTexCount) + 0.5 * (1 - s) + 0.5 * (floor(k) * rcp(n));
         float w1 = t * rcp(zTexCount) + 0.5 * (1 - s) + 0.5 * (ceil(k)  * rcp(n));
 
@@ -109,7 +128,9 @@ Shader "Hidden/HDRP/Sky/RenderPbrSky"
                          frac(k)).rgb;
 
         // return float4(radiance, 1.0);
-        return float4(radiance / (radiance + 1), 1.0);
+        return float4(log(radiance+1) / (log(radiance+1) + 1), 1.0);
+
+        */
     }
 
     float4 FragBaking(Varyings input) : SV_Target

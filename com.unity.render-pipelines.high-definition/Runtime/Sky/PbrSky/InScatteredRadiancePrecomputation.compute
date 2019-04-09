@@ -29,18 +29,23 @@ void main(uint3 dispatchThreadId : SV_DispatchThreadID)
     float NdotV  = UnmapAerialPerspective(float3(uvw.xy, aboveHorizon)).x;
     float height = UnmapAerialPerspective(float3(uvw.xy, aboveHorizon)).y;
     float NdotL  = UnmapCosineOfZenithAngle(frac(uvw.z));
-    float LdotV  = UnmapCosineOfLightViewAngle((textureId & ~n) * rcp(n - 1));
     float cosHor = GetCosineOfHorizonZenithAngle(height);
+    float phiV   = UnmapAzimuthAngle(saturate((textureId & ~n) * rcp(n - 1)));
 
-    float3 L, N, V;
-    ComputeAtmosphericLocalFrame(NdotL, NdotV, LdotV, L, N, V);
+    // Convention: the normal vector N points upwards.
+    // Utilize the rotational symmetry.
+    float3 N = float3(0, 0, 1);
+    float3 L = float3(sqrt(saturate(1 - NdotL * NdotL)), 0, NdotL);
+    float3 V = float3(sqrt(saturate(1 - NdotV * NdotV)) * float2(cos(phiV), sin(phiV)), NdotV);
+
+    float LdotV = dot(L, V);
 
     float3 radiance = 0;
 
     if (NdotL > cosHor)
     {
         // Sun is directly visible from this position.
-        float3 transm  = SampleTransmittanceTexture(NdotL, height);
+        float3 transm  = SampleTransmittanceTexture(NdotL, height, false);
         float3 scatter = AtmosphereScatter(LdotV, height);
 
         radiance += scatter * transm * _SunRadiance;
